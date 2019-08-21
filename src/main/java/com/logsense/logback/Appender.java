@@ -5,6 +5,7 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.more.appenders.FluencyLogbackAppender;
 import com.logsense.fluency.LogSenseFluencyBuilder;
+import com.logsense.LogSenseConfig;
 import com.logsense.opentracing.ISampler;
 import com.logsense.opentracing.ITraceExtractor;
 import com.logsense.opentracing.SamplerBuilder;
@@ -30,6 +31,7 @@ public class Appender<E> extends FluencyLogbackAppender<E> {
     private final static String FIELD_CS_PATTERN_KEY = "cs_pattern_key";
     private final static String FIELD_CS_SOURCE_IP = "cs_src_ip";
     private final static String FIELD_SOURCE_NAME = "source_name";
+    private final static String FIELD_SERVICE_NAME = "ot.service.name";
 
     private final static String FIELD_TRACE_ID = "ot.trace_id";
     private final static String FIELD_SPAN_ID = "ot.span_id";
@@ -37,9 +39,6 @@ public class Appender<E> extends FluencyLogbackAppender<E> {
     private final static String FIELD_TYPE = "_type";
     private final static String VALUE_TYPE = "java";
 
-    private final static String PROPERTY_LOGSENSE_TOKEN = "logsense.token";
-    private final static String PROPERTY_LOGSENSE_CONFIG = "logsense.config";
-    private final static String ENV_LOGSENSE_TOKEN = "LOGSENSE_TOKEN";
 
     private final static String[] FIELDS_SKIPPED = new String[] {
             "msg" // essentially a duplicate of message
@@ -140,11 +139,21 @@ public class Appender<E> extends FluencyLogbackAppender<E> {
     }
 
     public Appender() {
+        if (additionalFields == null) {
+            additionalFields = new HashMap<String, String>();
+        }
+
         // Just set the defaults that are always the same for LogSense output
         setTag("structured");
 
-        setPort(32714);
-        setRemoteHost("logs.logsense.com");
+        LogSenseConfig config = LogSenseConfig.get();
+
+        setPort(config.getPort());
+        setRemoteHost(config.getHost());
+        if (isValidLogsenseToken(config.getCustomerToken())) {
+            setLogsenseToken(config.getCustomerToken());
+        }
+        setServiceName(config.getServiceName());
 
         setAckResponseMode(true);
         setBufferChunkInitialSize(2097152);
@@ -157,11 +166,6 @@ public class Appender<E> extends FluencyLogbackAppender<E> {
         setUseEventTime(true);
         setSslEnabled(true);
 
-        if (additionalFields == null) {
-            additionalFields = new HashMap<String, String>();
-        }
-
-        setPropertiesFromEnv();
         setPatternKey("message");
         this.additionalFields.put(FIELD_TYPE, VALUE_TYPE);
 
@@ -245,33 +249,6 @@ public class Appender<E> extends FluencyLogbackAppender<E> {
         this.additionalFields.remove(FIELD_SPAN_ID);
     }
 
-    private void setPropertiesFromEnv() {
-        // Step 1 - try to fetch it from property
-        String token_maybe = System.getProperties().getProperty(PROPERTY_LOGSENSE_TOKEN);
-
-        // Step 2 - not present? use env variable
-        if (!isValidLogsenseToken(token_maybe)) {
-            token_maybe = System.getenv(ENV_LOGSENSE_TOKEN);
-        }
-
-        // Step 3 - not present? maybe config file was specified?
-        if (!isValidLogsenseToken(token_maybe)) {
-            String config_file = System.getProperties().getProperty(PROPERTY_LOGSENSE_CONFIG);
-            if (config_file != null && !config_file.isEmpty()) {
-                Properties prop = attemptLoadingPropertyFile(config_file);
-                try {
-                    token_maybe = prop.getProperty(PROPERTY_LOGSENSE_TOKEN);
-                } catch (NullPointerException npe) {
-                    // Just skip it silently
-                }
-            }
-        }
-
-        if (isValidLogsenseToken(token_maybe)) {
-            setLogsenseToken(token_maybe);
-        }
-    }
-
     /**
      * @param useLocalIpAddress if set to true, figures out what is the local IP address and sends it
      *                          with the logs
@@ -326,6 +303,17 @@ public class Appender<E> extends FluencyLogbackAppender<E> {
 
     public String getLogsenseToken() {
         return this.additionalFields.get(FIELD_CS_CUSTOMER_TOKEN);
+    }
+
+
+    public void setServiceName(String serviceName) {
+        if (serviceName != null && !serviceName.trim().isEmpty()) {
+            this.additionalFields.put(FIELD_SERVICE_NAME, serviceName);
+        }
+    }
+
+    public String getServiceName() {
+        return this.additionalFields.get(FIELD_SERVICE_NAME);
     }
 
     /**
